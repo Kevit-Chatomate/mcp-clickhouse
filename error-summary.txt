@@ -1,0 +1,2 @@
+Actions: Refactored error-investigation prompt to clarify required inputs, namespace validation, workflow (code review before logs), strict ClickHouse query rules, and refreshed example queries.
+Conclusion: Prompt prepared for consistent investigations; no specific error was analyzed in this change.

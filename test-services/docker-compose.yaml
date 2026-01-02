@@ -3,13 +3,40 @@ services:
     image: clickhouse/clickhouse-server:latest
     ports:
       - "8123:8123"
-      - "9000:9000"
+      - "9005:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     environment:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
       - CLICKHOUSE_DB=default
+    networks:
+      - mcp-network
+
+  mcp-clickhouse:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    container_name: mcp-clickhouse
+    ports:
+      - "8000:8000"
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse
+      - CLICKHOUSE_SECURE=false
+      - CLICKHOUSE_MCP_SERVER_TRANSPORT=http
+      - CLICKHOUSE_MCP_BIND_HOST=0.0.0.0
+      - CLICKHOUSE_MCP_BIND_PORT=8000
+    depends_on:
+      - clickhouse
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
 
 volumes:
   clickhouse-data:

@@ -5,6 +5,8 @@ import concurrent.futures
 import atexit
 import os
 import uuid
+import re
+import json
 
 import clickhouse_connect
 import chdb.session as chs
@@ -21,6 +23,7 @@ from starlette.responses import PlainTextResponse
 
 from mcp_clickhouse.mcp_env import get_config, get_chdb_config, get_mcp_config
 from mcp_clickhouse.chdb_prompt import CHDB_PROMPT
+from mcp_clickhouse.sql_validator import validate_query
 
 
 @dataclass
@@ -399,6 +402,14 @@ def run_select_query(query: str):
     """Run a SELECT query in a ClickHouse database"""
     logger.info(f"Executing SELECT query: {query}")
     try:
+        # Validate query using sqlglot-based validation
+        is_valid, error_messages = validate_query(query, require_limit=True, require_time_range=True)
+        
+        if not is_valid:
+            error_msg = "; ".join(error_messages)
+            logger.error(f"Query validation failed: {error_msg}")
+            raise ToolError(error_msg)
+    
         future = QUERY_EXECUTOR.submit(execute_query, query)
         try:
             timeout_secs = get_mcp_config().query_timeout
@@ -412,7 +423,8 @@ def run_select_query(query: str):
                     "status": "error",
                     "message": f"Query failed: {result['error']}",
                 }
-            return result
+            masked_result = mask_sensitive_data(result)
+            return masked_result
         except concurrent.futures.TimeoutError:
             logger.warning(f"Query timed out after {timeout_secs} seconds: {query}")
             future.cancel()
@@ -579,3 +591,27 @@ if os.getenv("CHDB_ENABLED", "false").lower() == "true":
     )
     mcp.add_prompt(chdb_prompt)
     logger.info("chDB tools and prompts registered")
+
+
+JWT_REGEX = r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+
+def mask_sensitive_data(data):
+    """
+    Recursively mask ONLY JWT tokens in any data structure.
+    """
+
+    if isinstance(data, dict):
+        return {key: mask_sensitive_data(value) for key, value in data.items()}
+
+    elif isinstance(data, list):
+        return [mask_sensitive_data(item) for item in data]
+
+    elif isinstance(data, tuple):
+        return tuple(mask_sensitive_data(item) for item in data)
+
+    elif isinstance(data, str):
+        # Mask only JWT tokens
+        return re.sub(JWT_REGEX, '*****************************', data)
+
+    else:
+        return data
