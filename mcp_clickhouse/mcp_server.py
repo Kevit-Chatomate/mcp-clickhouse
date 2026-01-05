@@ -402,8 +402,8 @@ def run_select_query(query: str):
     """Run a SELECT query in a ClickHouse database"""
     logger.info(f"Executing SELECT query: {query}")
     try:
-        # Validate query using sqlglot-based validation
-        is_valid, error_messages = validate_query(query, require_limit=True, require_time_range=True)
+        # Validate query before process
+        is_valid, error_messages = validate_query(query)
         
         if not is_valid:
             error_msg = "; ".join(error_messages)
