@@ -89,7 +89,7 @@ Inspect the codebase and documentation to identify:
 
 **If the error involves data from backend APIs:**
 
-1. **Identify API calls** in the component (useEffect, event handlers, RXjs etc.)
+1. **Identify API calls** in the component (event handlers, RXjs etc.)
 
 2. **Check for common API data issues:**
 
@@ -107,15 +107,23 @@ Inspect the codebase and documentation to identify:
    - Default fallback values
    - Error state handling
 
-### Step 3: Determine Root Cause
+### Step 3: Analyze All Possible Causes
 
-**Classify the error:**
+**Identify all potential root causes:**
 
-- **Frontend Code Issue:** Missing validation, logic errors, incorrect state handling, event handler bugs
-- **Backend Data Issue:** API returns wrong data types, missing fields, invalid values, or HTTP errors
-- **Integration Issue:** Mismatch between frontend expectations and backend contract
+Before jumping to conclusions, systematically evaluate all possibilities
 
-### Step 4: Propose Solution
+### Step 4: Determine Best Root Cause
+
+**Select the most likely root cause:**
+
+After analyzing all possibilities, determine the best explanation by:
+
+- Matching evidence from code review and error details
+- Considering which cause explains all symptoms
+- Validating against reproduction steps
+
+### Step 5: Propose Solution
 
 **Provide specific, actionable fixes:**
 
@@ -128,7 +136,7 @@ Inspect the codebase and documentation to identify:
 
 ## Error Summary Creation
 
-After completing the investigation, create `frontend-error-summary.txt` with:
+After completing the investigation, create `frontend-error-summary.md` with:
 
 1. **File name** where the error originated (with path).
 2. **Suspected codebase issue** (what and why):
@@ -147,5 +155,4 @@ After completing the investigation, create `frontend-error-summary.txt` with:
 Include brief notes on the investigation steps performed to reach these conclusions.
 
 **Important:**
-- Create new file `frontend-error-summary.txt` and write your investigation details.
-- **Investigation limit**: Perform maximum 10 search/analysis iterations. After that, provide your best solution based on findings. Do not continue searching indefinitely.
+- **Investigation limit**: Perform maximum 10 search/analysis iterations. After reaching this limit, provide a summary of your current investigation findings and ask the user if they want to continue investigating further or proceed with the best solution based on current findings.

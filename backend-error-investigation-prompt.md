@@ -222,17 +222,29 @@ SETTINGS max_execution_time = 30;
 
 ---
 
-## Step 3: Determine Root Cause
 
-**Classify the error:**
+### Step 3: Analyze All Possible Causes
 
+**Identify all potential root causes:**
+
+Before jumping to conclusions, systematically evaluate all possibilities
 - **Service/Controller Issue:** Missing validation, logic errors, incorrect error handling, business logic bugs
 - **Database Issue:** Query failures, connection issues, transaction problems, data integrity violations
 - **Infrastructure Issue:** Network timeouts, service unavailability, resource exhaustion, configuration errors
 - **Dependency Issue:** External API failures, message queue issues, cache problems, third-party service errors
 - **Data Issue:** Invalid input data, missing required fields, wrong data types, constraint violations
 
-## Step 4: Propose Solution
+### Step 4: Determine Best Root Cause
+
+**Select the most likely root cause:**
+
+After analyzing all possibilities, determine the best explanation by:
+
+- Matching evidence from code review and error details
+- Considering which cause explains all symptoms
+- Validating against reproduction steps
+
+## Step 5: Propose Solution
 
 **Provide specific, actionable fixes:**
 
@@ -248,7 +260,7 @@ SETTINGS max_execution_time = 30;
 
 ## Error Summary Creation
 
-After completing the investigation, create `backend-error-summary.txt` with:
+After completing the investigation, create `backend-error-summary.md` with:
 
 1. **File name** where the error originated (with path).
 2. **Suspected codebase issue** (what and why):
@@ -270,5 +282,4 @@ After completing the investigation, create `backend-error-summary.txt` with:
 Include brief notes on the investigation steps performed to reach these conclusions.
 
 **Important:**
-- Create new file `backend-error-summary.txt` and write your investigation details.
 - **Investigation limit**: Perform maximum 10 search/analysis iterations. After that, provide your best solution based on findings. Do not continue searching indefinitely.
