@@ -1,0 +1,20 @@
+services:
+
+  mcp-clickhouse:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: mcp-clickhouse
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
+
+volumes:
+  clickhouse-data:

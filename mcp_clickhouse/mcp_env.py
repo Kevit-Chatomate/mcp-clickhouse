@@ -84,6 +84,7 @@ class ClickHouseConfig:
     @property
     def password(self) -> str:
         """Get the ClickHouse password."""
+        print(os.environ["CLICKHOUSE_PASSWORD"])
         return os.environ["CLICKHOUSE_PASSWORD"]
 
     @property
