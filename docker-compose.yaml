@@ -1,9 +1,7 @@
 services:
 
   mcp-clickhouse:
-    build:
-      context: .
-      dockerfile: ./Dockerfile
+    build: .
     container_name: mcp-clickhouse
     ports:
       - "8000:8000"
