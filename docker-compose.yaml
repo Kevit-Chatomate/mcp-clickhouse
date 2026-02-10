@@ -1,5 +1,4 @@
 services:
-
   mcp-clickhouse:
     build: .
     container_name: mcp-clickhouse
