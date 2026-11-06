@@ -1,64 +1,43 @@
-import logging
-import json
-from typing import Optional, List, Any, Dict
-import concurrent.futures
+"""Assemble the default server and preserve package compatibility exports."""
+
 import atexit
+import logging
 import os
-import uuid
-import re
-import json
+from importlib.metadata import PackageNotFoundError, version as package_version
 
-import clickhouse_connect
-import chdb.session as chs
-from clickhouse_connect.driver.binding import format_query_value
-from dotenv import load_dotenv
-from fastmcp import FastMCP
-from cachetools import TTLCache
-from fastmcp.tools import Tool
 from fastmcp.prompts import Prompt
-from fastmcp.exceptions import ToolError
-from dataclasses import dataclass, field, asdict, is_dataclass
-from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from fastmcp.tools import Tool
 
-from mcp_clickhouse.mcp_env import get_config, get_chdb_config, get_mcp_config
-from mcp_clickhouse.chdb_prompt import CHDB_PROMPT
-from mcp_clickhouse.sql_validator import validate_query
+from mcp_clickhouse import clients
+from mcp_clickhouse.auth import _initialize_auth_parser, _load_default_dotenv
+from mcp_clickhouse.chdb_backend import _ChDBBackend, chdb_initial_prompt as chdb_initial_prompt
+from mcp_clickhouse.clients import CLIENT_CONFIG_OVERRIDES_KEY as CLIENT_CONFIG_OVERRIDES_KEY
+from mcp_clickhouse.executors import _Executors
+from mcp_clickhouse.health import _Health
+from mcp_clickhouse.mcp_env import (
+    get_chdb_config,
+    get_mcp_config,
+)
+from mcp_clickhouse.metadata import (
+    _Metadata,
+    fetch_table_names_from_system as fetch_table_names_from_system,
+    get_paginated_table_data as get_paginated_table_data,
+)
+from mcp_clickhouse.queries import _Queries
+from mcp_clickhouse.skills_advisor import CLICKHOUSE_SERVER_INSTRUCTIONS
+from mcp_clickhouse.transport import ClickHouseFastMCP as ClickHouseFastMCP
 
 
-@dataclass
-class Column:
-    database: str
-    table: str
-    name: str
-    column_type: str
-    default_kind: Optional[str]
-    default_expression: Optional[str]
-    comment: Optional[str]
-
-
-@dataclass
-class Table:
-    database: str
-    name: str
-    engine: str
-    create_table_query: str
-    dependencies_database: str
-    dependencies_table: str
-    engine_full: str
-    sorting_key: str
-    primary_key: str
-    total_rows: int
-    total_bytes: int
-    total_bytes_uncompressed: int
-    parts: int
-    active_parts: int
-    total_marks: int
-    comment: Optional[str] = None
-    columns: List[Column] = field(default_factory=list)
+def _get_mcp_server_version() -> str:
+    """Return the installed package version or an explicit unknown marker."""
+    try:
+        return package_version("mcp-clickhouse")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 MCP_SERVER_NAME = "mcp-clickhouse"
+MCP_SERVER_VERSION = _get_mcp_server_version()
 
 # Configure logging
 logging.basicConfig(
@@ -66,524 +45,85 @@ logging.basicConfig(
 )
 logger = logging.getLogger(MCP_SERVER_NAME)
 
-QUERY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=10)
-atexit.register(lambda: QUERY_EXECUTOR.shutdown(wait=True))
+_load_default_dotenv()
 
-load_dotenv()
+_executors = _Executors(get_mcp_config().max_workers)
 
-mcp = FastMCP(name=MCP_SERVER_NAME)
+_clickhouse_clients = clients._ClickHouseClients()
+
+_queries = _Queries(_executors, _clickhouse_clients)
+
+_health = _Health(_executors, _clickhouse_clients)
+
+_initialize_auth_parser()
+
+mcp = ClickHouseFastMCP(
+    name=MCP_SERVER_NAME,
+    version=MCP_SERVER_VERSION,
+    instructions=CLICKHOUSE_SERVER_INSTRUCTIONS,
+)
+_chdb_backend = _ChDBBackend(_executors)
 
 
-@mcp.custom_route("/health", methods=["GET"])
-async def health_check(request: Request) -> PlainTextResponse:
-    """Health check endpoint for monitoring server status.
+_health.chdb_backend = _chdb_backend
+health_check = mcp.custom_route("/health", methods=["GET"])(_health.health_check)
 
-    Returns OK if the server is running and can connect to ClickHouse.
+
+_metadata = _Metadata(_executors, _clickhouse_clients)
+list_databases = _metadata.list_databases
+list_databases_async = _metadata.list_databases_async
+table_pagination_cache = _metadata.table_pagination_cache
+create_page_token = _metadata.create_page_token
+list_tables = _metadata.list_tables
+list_tables_async = _metadata.list_tables_async
+
+
+run_query = _queries.run_query
+run_query_async = _queries.run_query_async
+
+
+create_clickhouse_client = _clickhouse_clients.create_clickhouse_client
+
+
+def _shutdown():
+    # Drain every worker before closing the clients they may hold.
+    _executors.shutdown()
+    _clickhouse_clients._clear_client_cache()
+
+
+atexit.register(_shutdown)
+
+
+create_chdb_client = _chdb_backend.create_chdb_client
+run_chdb_select_query = _chdb_backend.run_chdb_select_query
+run_chdb_select_query_async = _chdb_backend.run_chdb_select_query_async
+
+
+def _register_chdb_tools():
+    """Register chDB tools when the feature is enabled and available.
+
+    Note: This function is not idempotent. Calling it multiple times will
+    register duplicate tools. It is intended to be called once at module load.
     """
-    try:
-        # Check if ClickHouse is enabled by trying to create config
-        # If ClickHouse is disabled, this will succeed but connection will fail
-        clickhouse_enabled = os.getenv("CLICKHOUSE_ENABLED", "true").lower() == "true"
-
-        if not clickhouse_enabled:
-            # If ClickHouse is disabled, check chDB status
-            chdb_config = get_chdb_config()
-            if chdb_config.enabled:
-                return PlainTextResponse("OK - MCP server running with chDB enabled")
-            else:
-                # Both ClickHouse and chDB are disabled - this is an error
-                return PlainTextResponse(
-                    "ERROR - Both ClickHouse and chDB are disabled. At least one must be enabled.",
-                    status_code=503,
-                )
-
-        # Try to create a client connection to verify ClickHouse connectivity
-        client = create_clickhouse_client()
-        version = client.server_version
-        return PlainTextResponse(f"OK - Connected to ClickHouse {version}")
-    except Exception as e:
-        # Return 503 Service Unavailable if we can't connect to ClickHouse
-        return PlainTextResponse(f"ERROR - Cannot connect to ClickHouse: {str(e)}", status_code=503)
-
-
-def result_to_table(query_columns, result) -> List[Table]:
-    return [Table(**dict(zip(query_columns, row))) for row in result]
-
-
-def result_to_column(query_columns, result) -> List[Column]:
-    return [Column(**dict(zip(query_columns, row))) for row in result]
-
-
-def to_json(obj: Any) -> str:
-    if is_dataclass(obj):
-        return json.dumps(asdict(obj), default=to_json)
-    elif isinstance(obj, list):
-        return [to_json(item) for item in obj]
-    elif isinstance(obj, dict):
-        return {key: to_json(value) for key, value in obj.items()}
-    return obj
-
-
-def list_databases():
-    """List available ClickHouse databases"""
-    logger.info("Listing all databases")
-    client = create_clickhouse_client()
-    result = client.command("SHOW DATABASES")
-
-    # Convert newline-separated string to list and trim whitespace
-    if isinstance(result, str):
-        databases = [db.strip() for db in result.strip().split("\n")]
-    else:
-        databases = [result]
-
-    logger.info(f"Found {len(databases)} databases")
-    return json.dumps(databases)
-
-
-# Store pagination state for list_tables with 1-hour expiry
-# Using TTLCache from cachetools to automatically expire entries after 1 hour
-table_pagination_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)  # 3600 seconds = 1 hour
-
-
-def fetch_table_names_from_system(
-    client,
-    database: str,
-    like: Optional[str] = None,
-    not_like: Optional[str] = None,
-) -> List[str]:
-    """Get list of table names from system.tables.
-
-    Args:
-        client: ClickHouse client
-        database: Database name
-        like: Optional pattern to filter table names (LIKE)
-        not_like: Optional pattern to filter out table names (NOT LIKE)
-
-    Returns:
-        List of table names
-    """
-    query = f"SELECT name FROM system.tables WHERE database = {format_query_value(database)}"
-    if like:
-        query += f" AND name LIKE {format_query_value(like)}"
-
-    if not_like:
-        query += f" AND name NOT LIKE {format_query_value(not_like)}"
-
-    result = client.query(query)
-    table_names = [row[0] for row in result.result_rows]
-    return table_names
-
-
-def get_paginated_table_data(
-    client,
-    database: str,
-    table_names: List[str],
-    start_idx: int,
-    page_size: int,
-    include_detailed_columns: bool = True,
-) -> tuple[List[Table], int, bool]:
-    """Get detailed information for a page of tables.
-
-    Args:
-        client: ClickHouse client
-        database: Database name
-        table_names: List of all table names to paginate
-        start_idx: Starting index for pagination
-        page_size: Number of tables per page
-        include_detailed_columns: Whether to include detailed column metadata (default: True)
-
-    Returns:
-        Tuple of (list of Table objects, end index, has more pages)
-    """
-    end_idx = min(start_idx + page_size, len(table_names))
-    current_page_table_names = table_names[start_idx:end_idx]
-
-    if not current_page_table_names:
-        return [], end_idx, False
-
-    query = f"""
-        SELECT database, name, engine, create_table_query, dependencies_database,
-               dependencies_table, engine_full, sorting_key, primary_key, total_rows,
-               total_bytes, total_bytes_uncompressed, parts, active_parts, total_marks, comment
-        FROM system.tables
-        WHERE database = {format_query_value(database)}
-        AND name IN ({", ".join(format_query_value(name) for name in current_page_table_names)})
-    """
-
-    result = client.query(query)
-    tables = result_to_table(result.column_names, result.result_rows)
-
-    if include_detailed_columns:
-        for table in tables:
-            column_data_query = f"""
-                SELECT database, table, name, type AS column_type, default_kind, default_expression, comment
-                FROM system.columns
-                WHERE database = {format_query_value(database)}
-                AND table = {format_query_value(table.name)}
-            """
-            column_data_query_result = client.query(column_data_query)
-            table.columns = result_to_column(
-                column_data_query_result.column_names,
-                column_data_query_result.result_rows,
-            )
-    else:
-        for table in tables:
-            table.columns = []
-
-    return tables, end_idx, end_idx < len(table_names)
-
-
-def create_page_token(
-    database: str,
-    like: Optional[str],
-    not_like: Optional[str],
-    table_names: List[str],
-    end_idx: int,
-    include_detailed_columns: bool,
-) -> str:
-    """Create a new page token and store it in the cache.
-
-    Args:
-        database: Database name
-        like: LIKE pattern used to filter tables
-        not_like: NOT LIKE pattern used to filter tables
-        table_names: List of all table names
-        end_idx: Index to start from for the next page
-        include_detailed_columns: Whether to include detailed column metadata
-
-    Returns:
-        New page token
-    """
-    token = str(uuid.uuid4())
-    table_pagination_cache[token] = {
-        "database": database,
-        "like": like,
-        "not_like": not_like,
-        "table_names": table_names,
-        "start_idx": end_idx,
-        "include_detailed_columns": include_detailed_columns,
-    }
-    return token
-
-
-def list_tables(
-    database: str,
-    like: Optional[str] = None,
-    not_like: Optional[str] = None,
-    page_token: Optional[str] = None,
-    page_size: int = 50,
-    include_detailed_columns: bool = True,
-) -> Dict[str, Any]:
-    """List available ClickHouse tables in a database, including schema, comment,
-    row count, and column count.
-
-    Args:
-        database: The database to list tables from
-        like: Optional LIKE pattern to filter table names
-        not_like: Optional NOT LIKE pattern to exclude table names
-        page_token: Token for pagination, obtained from a previous call
-        page_size: Number of tables to return per page (default: 50)
-        include_detailed_columns: Whether to include detailed column metadata (default: True).
-            When False, the columns array will be empty but create_table_query still contains
-            all column information. This reduces payload size for large schemas.
-
-    Returns:
-        A dictionary containing:
-        - tables: List of table information (as dictionaries)
-        - next_page_token: Token for the next page, or None if no more pages
-        - total_tables: Total number of tables matching the filters
-    """
-    logger.info(
-        "Listing tables in database '%s' with like=%s, not_like=%s, "
-        "page_token=%s, page_size=%s, include_detailed_columns=%s",
-        database,
-        like,
-        not_like,
-        page_token,
-        page_size,
-        include_detailed_columns,
-    )
-    client = create_clickhouse_client()
-
-    if page_token and page_token in table_pagination_cache:
-        cached_state = table_pagination_cache[page_token]
-        cached_include_detailed = cached_state.get("include_detailed_columns", True)
-
-        if (
-            cached_state["database"] != database
-            or cached_state["like"] != like
-            or cached_state["not_like"] != not_like
-            or cached_include_detailed != include_detailed_columns
-        ):
-            logger.warning(
-                "Page token %s is for a different database, filter, or metadata setting. "
-                "Ignoring token and starting from beginning.",
-                page_token,
-            )
-            page_token = None
-        else:
-            table_names = cached_state["table_names"]
-            start_idx = cached_state["start_idx"]
-
-            tables, end_idx, has_more = get_paginated_table_data(
-                client,
-                database,
-                table_names,
-                start_idx,
-                page_size,
-                include_detailed_columns,
-            )
-
-            next_page_token = None
-            if has_more:
-                next_page_token = create_page_token(
-                    database, like, not_like, table_names, end_idx, include_detailed_columns
-                )
-
-            del table_pagination_cache[page_token]
-
-            logger.info(
-                "Returned page with %s tables (total: %s), next_page_token=%s",
-                len(tables),
-                len(table_names),
-                next_page_token,
-            )
-            return {
-                "tables": [asdict(table) for table in tables],
-                "next_page_token": next_page_token,
-                "total_tables": len(table_names),
-            }
-
-    table_names = fetch_table_names_from_system(client, database, like, not_like)
-
-    start_idx = 0
-    tables, end_idx, has_more = get_paginated_table_data(
-        client,
-        database,
-        table_names,
-        start_idx,
-        page_size,
-        include_detailed_columns,
-    )
-
-    next_page_token = None
-    if has_more:
-        next_page_token = create_page_token(
-            database, like, not_like, table_names, end_idx, include_detailed_columns
-        )
-
-    logger.info(
-        "Found %s tables, returning %s with next_page_token=%s",
-        len(table_names),
-        len(tables),
-        next_page_token,
-    )
-
-    return {
-        "tables": [asdict(table) for table in tables],
-        "next_page_token": next_page_token,
-        "total_tables": len(table_names),
-    }
-
-
-def execute_query(query: str):
-    client = create_clickhouse_client()
-    try:
-        read_only = get_readonly_setting(client)
-        res = client.query(query, settings={"readonly": read_only})
-        logger.info(f"Query returned {len(res.result_rows)} rows")
-        return {"columns": res.column_names, "rows": res.result_rows}
-    except Exception as err:
-        logger.error(f"Error executing query: {err}")
-        raise ToolError(f"Query execution failed: {str(err)}")
-
-
-def run_select_query(query: str):
-    """Run a SELECT query in a ClickHouse database"""
-    logger.info(f"Executing SELECT query: {query}")
-    try:
-        # Validate query before process
-        is_valid, error_messages = validate_query(query)
-        
-        if not is_valid:
-            error_msg = "; ".join(error_messages)
-            logger.error(f"Query validation failed: {error_msg}")
-            raise ToolError(error_msg)
-    
-        future = QUERY_EXECUTOR.submit(execute_query, query)
-        try:
-            timeout_secs = get_mcp_config().query_timeout
-            result = future.result(timeout=timeout_secs)
-            # Check if we received an error structure from execute_query
-            if isinstance(result, dict) and "error" in result:
-                logger.warning(f"Query failed: {result['error']}")
-                # MCP requires structured responses; string error messages can cause
-                # serialization issues leading to BrokenResourceError
-                return {
-                    "status": "error",
-                    "message": f"Query failed: {result['error']}",
-                }
-            masked_result = mask_sensitive_data(result)
-            return masked_result
-        except concurrent.futures.TimeoutError:
-            logger.warning(f"Query timed out after {timeout_secs} seconds: {query}")
-            future.cancel()
-            raise ToolError(f"Query timed out after {timeout_secs} seconds")
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in run_select_query: {str(e)}")
-        raise RuntimeError(f"Unexpected error during query execution: {str(e)}")
-
-
-def create_clickhouse_client():
-    client_config = get_config().get_client_config()
-    logger.info(
-        f"Creating ClickHouse client connection to {client_config['host']}:{client_config['port']} "
-        f"as {client_config['username']} "
-        f"(secure={client_config['secure']}, verify={client_config['verify']}, "
-        f"connect_timeout={client_config['connect_timeout']}s, "
-        f"send_receive_timeout={client_config['send_receive_timeout']}s)"
-    )
-
-    try:
-        client = clickhouse_connect.get_client(**client_config)
-        # Test the connection
-        version = client.server_version
-        logger.info(f"Successfully connected to ClickHouse server version {version}")
-        return client
-    except Exception as e:
-        logger.error(f"Failed to connect to ClickHouse: {str(e)}")
-        raise
-
-
-def get_readonly_setting(client) -> str:
-    """Get the appropriate readonly setting value to use for queries.
-
-    This function handles potential conflicts between server and client readonly settings:
-    - readonly=0: No read-only restrictions
-    - readonly=1: Only read queries allowed, settings cannot be changed
-    - readonly=2: Only read queries allowed, settings can be changed (except readonly itself)
-
-    If server has readonly=2 and client tries to set readonly=1, it would cause:
-    "Setting readonly is unknown or readonly" error
-
-    This function preserves the server's readonly setting unless it's 0, in which case
-    we enforce readonly=1 to ensure queries are read-only.
-
-    Args:
-        client: ClickHouse client connection
-
-    Returns:
-        String value of readonly setting to use
-    """
-    read_only = client.server_settings.get("readonly")
-    if read_only:
-        if read_only == "0":
-            return "1"  # Force read-only mode if server has it disabled
-        else:
-            return read_only.value  # Respect server's readonly setting (likely 2)
-    else:
-        return "1"  # Default to basic read-only mode if setting isn't present
-
-
-def create_chdb_client():
-    """Create a chDB client connection."""
     if not get_chdb_config().enabled:
-        raise ValueError("chDB is not enabled. Set CHDB_ENABLED=true to enable it.")
-    return _chdb_client
+        return
 
+    _chdb_backend.client = _chdb_backend._init_chdb_client()
+    if _chdb_backend.client is None:
+        logger.warning("chDB is enabled but unavailable; skipping chDB tool registration")
+        return
 
-def execute_chdb_query(query: str):
-    """Execute a query using chDB client."""
-    client = create_chdb_client()
-    try:
-        res = client.query(query, "JSON")
-        if res.has_error():
-            error_msg = res.error_message()
-            logger.error(f"Error executing chDB query: {error_msg}")
-            return {"error": error_msg}
-
-        result_data = res.data()
-        if not result_data:
-            return []
-
-        result_json = json.loads(result_data)
-
-        return result_json.get("data", [])
-
-    except Exception as err:
-        logger.error(f"Error executing chDB query: {err}")
-        return {"error": str(err)}
-
-
-def run_chdb_select_query(query: str):
-    """Run SQL in chDB, an in-process ClickHouse engine"""
-    logger.info(f"Executing chDB SELECT query: {query}")
-    try:
-        future = QUERY_EXECUTOR.submit(execute_chdb_query, query)
-        try:
-            timeout_secs = get_mcp_config().query_timeout
-            result = future.result(timeout=timeout_secs)
-            # Check if we received an error structure from execute_chdb_query
-            if isinstance(result, dict) and "error" in result:
-                logger.warning(f"chDB query failed: {result['error']}")
-                return {
-                    "status": "error",
-                    "message": f"chDB query failed: {result['error']}",
-                }
-            return result
-        except concurrent.futures.TimeoutError:
-            logger.warning(
-                f"chDB query timed out after {timeout_secs} seconds: {query}"
-            )
-            future.cancel()
-            return {
-                "status": "error",
-                "message": f"chDB query timed out after {timeout_secs} seconds",
-            }
-    except Exception as e:
-        logger.error(f"Unexpected error in run_chdb_select_query: {e}")
-        return {"status": "error", "message": f"Unexpected error: {e}"}
-
-
-def chdb_initial_prompt() -> str:
-    """This prompt helps users understand how to interact and perform common operations in chDB"""
-    return CHDB_PROMPT
-
-
-def _init_chdb_client():
-    """Initialize the global chDB client instance."""
-    try:
-        if not get_chdb_config().enabled:
-            logger.info("chDB is disabled, skipping client initialization")
-            return None
-
-        client_config = get_chdb_config().get_client_config()
-        data_path = client_config["data_path"]
-        logger.info(f"Creating chDB client with data_path={data_path}")
-        client = chs.Session(path=data_path)
-        logger.info(f"Successfully connected to chDB with data_path={data_path}")
-        return client
-    except Exception as e:
-        logger.error(f"Failed to initialize chDB client: {e}")
-        return None
-
-
-# Register tools based on configuration
-if os.getenv("CLICKHOUSE_ENABLED", "true").lower() == "true":
-    mcp.add_tool(Tool.from_function(list_databases))
-    mcp.add_tool(Tool.from_function(list_tables))
-    mcp.add_tool(Tool.from_function(run_select_query))
-    logger.info("ClickHouse tools registered")
-
-
-if os.getenv("CHDB_ENABLED", "false").lower() == "true":
-    _chdb_client = _init_chdb_client()
-    if _chdb_client:
-        atexit.register(lambda: _chdb_client.close())
-
-    mcp.add_tool(Tool.from_function(run_chdb_select_query))
+    atexit.register(_chdb_backend.client.close)
+    mcp.add_tool(
+        Tool.from_function(
+            run_chdb_select_query_async,
+            name="run_chdb_select_query",
+            description=(
+                "Run SQL in chDB, an in-process ClickHouse engine. Integers outside "
+                "[-9007199254740991, 9007199254740991] are returned as decimal strings."
+            ),
+        )
+    )
     chdb_prompt = Prompt.from_function(
         chdb_initial_prompt,
         name="chdb_initial_prompt",
@@ -593,25 +133,40 @@ if os.getenv("CHDB_ENABLED", "false").lower() == "true":
     logger.info("chDB tools and prompts registered")
 
 
-JWT_REGEX = r'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+if os.getenv("CLICKHOUSE_ENABLED", "true").lower() == "true":
+    mcp.add_tool(Tool.from_function(list_databases_async, name="list_databases"))
+    mcp.add_tool(Tool.from_function(list_tables_async, name="list_tables"))
+    mcp.add_tool(
+        Tool.from_function(
+            run_query_async,
+            name="run_query",
+            description=(
+                "Execute SQL queries in ClickHouse. Queries run in read-only mode by default. "
+                "Bind optional params by name with {name:Type} placeholders, such as "
+                "{name:String} or {vector:Array(Float32)}. Values may be JSON scalars, nulls, "
+                "or arrays. Pass exact large integers as decimal strings. JSON lists and "
+                "objects cannot bind to Tuple and Map types. Python percent "
+                "formatting and $name$ raw binary parameters are not supported. Parameter values "
+                "stay out of the MCP server's normal SQL log lines, but may appear in errors "
+                "and backend logs. "
+                "Set CLICKHOUSE_ALLOW_WRITE_ACCESS=true to allow DDL and DML operations. "
+                "Set CLICKHOUSE_ALLOW_DROP=true to additionally allow destructive operations "
+                "(DROP, TRUNCATE, DELETE, UPDATE, REPLACE TABLE/PARTITION, CREATE OR REPLACE, "
+                "CLEAR COLUMN/INDEX/PROJECTION, DETACH PERMANENTLY). That gate is a best-effort "
+                "accident guard, not a security boundary. Integers outside "
+                "[-9007199254740991, 9007199254740991] are returned as decimal strings. "
+                "Two optional checks also run through this tool. Use DESCRIBE (<query>) when "
+                "you need a query's output columns and types; it inspects the result schema "
+                "and surfaces analysis errors such as an unknown column, but a query that "
+                "describes cleanly can still fail at runtime. Consider EXPLAIN ESTIMATE "
+                "<query> before a SELECT that could be expensive; it returns the estimated "
+                "parts, rows and marks read from MergeTree family tables, which is not run "
+                "time and not result size. Neither runs the query body, though analysis can "
+                "execute scalar subqueries."
+            ),
+        )
+    )
+    logger.info("ClickHouse tools registered")
 
-def mask_sensitive_data(data):
-    """
-    Recursively mask ONLY JWT tokens in any data structure.
-    """
 
-    if isinstance(data, dict):
-        return {key: mask_sensitive_data(value) for key, value in data.items()}
-
-    elif isinstance(data, list):
-        return [mask_sensitive_data(item) for item in data]
-
-    elif isinstance(data, tuple):
-        return tuple(mask_sensitive_data(item) for item in data)
-
-    elif isinstance(data, str):
-        # Mask only JWT tokens
-        return re.sub(JWT_REGEX, '*****************************', data)
-
-    else:
-        return data
+_register_chdb_tools()
