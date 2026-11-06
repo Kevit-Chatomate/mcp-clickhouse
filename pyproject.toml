@@ -1,18 +1,28 @@
 [project]
 name = "mcp-clickhouse"
-version = "0.1.12"
+version = "0.7.0"
 description = "An MCP server for ClickHouse."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+]
 dependencies = [
-     "fastmcp>=2.0.0",
+     "fastmcp>=4.0.0,<4.2.0",
      "python-dotenv>=1.0.1",
-     "clickhouse-connect>=0.8.16",
+     "clickhouse-connect>=1.0.0,<2",
      "truststore>=0.10",
-     "chdb>=3.3.0",
      "cachetools>=5.5.0",
+     "uvicorn>=0.31.0",
+     "simplejson>=3.17.2,<5",
 ]
 
 [project.scripts]
@@ -22,6 +32,9 @@ mcp-clickhouse = "mcp_clickhouse.main:main"
 Home = "https://github.com/ClickHouse/mcp-clickhouse"
 
 [project.optional-dependencies]
+chdb = [
+    "chdb>=3.3.0; python_version < '3.15'"
+]
 dev = [
     "ruff",
     "pytest",
