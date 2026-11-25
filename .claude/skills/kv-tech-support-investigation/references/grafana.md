@@ -11,9 +11,9 @@ All environments use the same dashboard (uid `f2bfb1fb-1fd8-42be-8267-f51c661f64
 | Chatomate prod | `/d/f2bfb1fb-1fd8-42be-8267-f51c661f64a4/logs-chatomate?orgId=2` | `prod-chatomate` |
 | Chatomate beta | same as Chatomate prod (not verified) | `beta-chatomate` |
 | TTL | `/d/f2bfb1fb-1fd8-42be-8267-f51c661f64a4/logs-smartflo?orgId=1` | `prod-chatomate-ttl` |
-| Netcore | not known yet | `prod-netcore` |
+| Netcore | same as Chatomate prod (`logs-chatomate`, org 2) | `prod-netcore` |
 
-For Netcore, or when a link does not open, ask the user for one working dashboard URL and use its path and `orgId`. Never guess an org.
+When a link does not open, ask the user for one working dashboard URL and use its path and `orgId`. Never guess an org.
 
 ## Parameters
 
