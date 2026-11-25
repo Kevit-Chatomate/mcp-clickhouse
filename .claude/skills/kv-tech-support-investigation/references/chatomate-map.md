@@ -4,12 +4,14 @@ Where a symptom usually lives, what the service is called in the logs, and which
 
 ## Environments
 
-| Environment | Namespace (`ResourceAttributes['k8s.namespace.name']`) | Notes |
-|---|---|---|
-| Chatomate prod | `prod-chatomate` | database `cm_otel` |
-| Chatomate beta | `beta-chatomate` | same database, filter by namespace |
-| TTL | `prod-chatomate-ttl` | same code, roughly 10x the log volume: keep windows short |
-| Netcore | `prod-netcore` | some services are prefixed, e.g. `prod-netcore-wa-callback-processor` |
+| Environment | Code | Namespace (`ResourceAttributes['k8s.namespace.name']`) | Grafana | Notes |
+|---|---|---|---|---|
+| Chatomate prod | `codebase/chatomate` | `prod-chatomate` | `logs-chatomate`, org 2 | database `cm_otel` |
+| Chatomate beta | `codebase/chatomate` | `beta-chatomate` | as prod | same database, filter by namespace |
+| TTL | `codebase/ttl-omni` | `prod-chatomate-ttl` | `logs-smartflo`, org 1 | fork of chatomate, roughly 10x the log volume: keep windows short |
+| Netcore | `codebase/chatomate` (`PRODUCT=netcore`) | `prod-netcore` | `logs-chatomate`, org 2 | some services are prefixed, e.g. `prod-netcore-wa-callback-processor` |
+
+Paths below are chatomate's. ttl-omni follows the same layout but has TTL-only apps and changes: confirm every path and log message in ttl-omni for a TTL ticket. Grafana links: `grafana.md`.
 
 Confirm the database for TTL and Netcore with `list_databases`. Add a namespace filter whenever several environments share one table.
 

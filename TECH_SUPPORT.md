@@ -97,11 +97,22 @@ cp .example.env .env   # fill in the ClickHouse host, the mcp_support password a
 docker compose up -d --build
 ```
 
-Register it in Claude Code (HTTP transport, bearer token):
+Check it, then register it in Claude Code at user scope (HTTP transport, bearer token):
 
 ```bash
-claude mcp add --transport http clickhouse http://<host>:8000/mcp --header "Authorization: Bearer <CLICKHOUSE_MCP_AUTH_TOKEN>"
+curl -s http://localhost:18000/health          # 200 OK
+claude mcp add --scope user --transport http clickhouse http://localhost:18000/mcp --header "Authorization: Bearer <CLICKHOUSE_MCP_AUTH_TOKEN>"
 ```
+
+The server name must be `clickhouse`: the skill and subagent look for the tools `mcp__clickhouse__run_query`, `list_databases` and `list_tables`.
+
+### Port
+
+The server listens on **18000**, inside and outside the container, published on `127.0.0.1` only. It used to be 8000. Endpoint security software on some machines (Kaspersky `kesl`) silently drops host -> Docker-bridge TCP on the ports it monitors (80, 81, 443, 1080, 3128, 5000, 8000, 8080, 8088, 8888): the connection is accepted, nothing comes back, and Claude reports a 30 s timeout. 18000 is not on that list.
+
+To use another port, change `CLICKHOUSE_MCP_BIND_PORT` in `.env` (compose reads it for the published port too), the two entries in `CLICKHOUSE_MCP_ALLOWED_HOSTS`, and the URL in `claude mcp add`. Then `docker compose up -d`.
+
+Moving from 8000: `docker compose up -d` after updating `.env`, then `claude mcp remove clickhouse --scope user` and add it again with the new URL. Restart Claude sessions (or `/mcp` -> clickhouse -> Reconnect).
 
 Or run it locally over stdio without Docker:
 
@@ -112,7 +123,7 @@ MCP_MIDDLEWARE_MODULE=mcp_clickhouse.support_guard.middleware uv run mcp-clickho
 
 ## Install the skill and subagent
 
-Support engineers work in the chatomate repository, so install them at user level to use them there:
+Kevit engineers using the engineering-environment repo already have both (`.claude/skills/kv-tech-support-investigation/`, `.claude/agents/log-investigator.md`); nothing to install. Outside it, install them at user level:
 
 ```bash
 mkdir -p ~/.claude/skills ~/.claude/agents
