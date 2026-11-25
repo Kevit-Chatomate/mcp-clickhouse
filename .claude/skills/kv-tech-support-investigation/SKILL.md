@@ -1,6 +1,6 @@
 ---
 name: kv-tech-support-investigation
-description: "Investigate a Chatomate or TTL tech-support ticket end to end. Resolve the customer's bot, user, phone or campaign to IDs, find one verifiable anchor log in ClickHouse, follow its trace or request id, match the log lines to the code, and write a root-cause summary with the exact log lines and Grafana links to share. Reads chatomate for Chatomate and Netcore tickets, ttl-omni for TTL. Use when the user pastes a support ticket, says 'investigate this ticket', 'check the logs for X', 'why did X fail for this bot', 'customer says X is not working', or asks for backend or frontend error RCA. Works for backend errors (APIs, flows, campaigns, callbacks) and frontend errors (app-panel, admin-panel) by tracing them to the backend calls behind them."
+description: "Investigate a Chatomate, Netcore or TTL issue seen in production or beta (a support ticket, a customer report, or a developer reporting a live bug) end to end. Resolve the customer's bot, user, phone or campaign to IDs, find one verifiable anchor log in ClickHouse, follow its trace or request id, match the log lines to the code, and write a root-cause summary with the exact log lines and Grafana links to share. Reads chatomate for Chatomate and Netcore tickets, ttl-omni for TTL. Use when the user pastes a support ticket, says 'investigate this ticket', 'check the logs for X', 'why did X fail for this bot', 'customer says X is not working', or asks for backend or frontend error RCA of a production or beta issue. Not for bugs in code under development, an unmerged branch or a local ./dev.sh run: debug those normally. Works for backend errors (APIs, flows, campaigns, callbacks) and frontend errors (app-panel, admin-panel) by tracing them to the backend calls behind them."
 author: Shrut Sureja <shrut.sureja@kevit.io>
 ---
 
@@ -12,6 +12,14 @@ Two rules override everything below:
 
 1. **Never pull raw logs into this conversation.** All ClickHouse log searching goes through the `log-investigator` subagent, which returns a short digest. Production can produce a million log lines in five minutes. A single careless query can fill your context and slow the cluster down for everyone. The one exception is the **exact log**: the anchor and at most two other key lines, verbatim, which the subagent returns so the user can read and share them (Step 7).
 2. **Never repeat a credential.** The MCP server redacts tokens, but if you see something that looks like a secret (an auth header, API key, password or signed URL), do not quote it in chat, summaries or tickets. Write `[REDACTED]`.
+
+## When this skill applies
+
+Use it for an issue that happened in **production or beta**: a support ticket, a customer report, or a developer saying "this is broken in prod" or "customer X hits this error". The evidence is in the production logs.
+
+Do **not** use it for a bug in code that is still being written: a feature in progress, an unmerged branch, a failing test, or an error in a local `./dev.sh` run. Those logs are not in ClickHouse, and the intake (environment, time window, customer IDs) does not fit. If it is unclear, ask once: "Did this happen in production or beta, or only in your local or branch code?" When the answer is local or branch only, stop this skill, say so in one line, and debug normally: read the code, run the tests, read the dev task's own logs.
+
+Mixed case: a developer building a feature suspects it runs into an existing production bug. Investigate only the production part with this skill, and leave the in-progress code to the normal flow.
 
 ## Step 0 - Preconditions
 
