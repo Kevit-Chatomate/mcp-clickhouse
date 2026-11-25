@@ -1,0 +1,11 @@
+services:
+  mcp-clickhouse:
+    build: .
+    container_name: mcp-clickhouse
+    restart: unless-stopped
+    # Loopback only, never the LAN. The same port inside and outside the container,
+    # taken from CLICKHOUSE_MCP_BIND_PORT in .env (default 18000, see TECH_SUPPORT.md, Port).
+    ports:
+      - "127.0.0.1:${CLICKHOUSE_MCP_BIND_PORT:-18000}:${CLICKHOUSE_MCP_BIND_PORT:-18000}"
+    env_file:
+      - ./.env
