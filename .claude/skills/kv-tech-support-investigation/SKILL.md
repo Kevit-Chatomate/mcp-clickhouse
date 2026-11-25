@@ -111,7 +111,7 @@ Create `support-investigations/<YYYY-MM-DD>-<short-slug>.md` in the working dire
 1. **Ticket**: symptom, environment, window, identifiers (IDs, not secrets)
 2. **Verdict**: bug / configuration / external / expected behaviour, with confidence (high / medium / low)
 3. **Evidence**: anchor log (timestamp, service, condensed message), trace or request id, the timeline excerpt
-4. **Exact logs**: the subagent's EXACT LOGS block unchanged, each line in its own code block with its timestamp (UTC and IST), service, namespace and pod. Redactions stay `[REDACTED]`; never fill them in. If a line was cut by the MCP, say so and point to the Grafana link for the full line
+4. **Exact logs** (skip-logs mode: `Logs: not checked (no ClickHouse access)` and any lines the user pasted): the subagent's EXACT LOGS block unchanged, each line in its own code block with its timestamp (UTC and IST), service, namespace and pod. Redactions stay `[REDACTED]`; never fill them in. If a line was cut by the MCP, say so and point to the Grafana link for the full line
 5. **Grafana**: the anchor link and the wide link (`references/grafana.md`)
 6. **Code path**: `file:line` for each step, what goes wrong and why
 7. **Fix**: exact change with file paths, or the configuration step, or the customer-facing reply
@@ -122,7 +122,7 @@ Keep it under two screens, apart from the exact logs.
 
 Then tell the user, in chat:
 - the verdict in three lines;
-- the **exact anchor log** in a code block (and the other exact lines, if any), as in the file;
+- the **exact anchor log** in a code block (and the other exact lines, if any), as in the file (skip-logs mode: none, say `Logs: not checked (no ClickHouse access)` instead);
 - the **Grafana links** (anchor and wide), as plain URLs they can open or paste into an email;
 - the path to the file.
 
