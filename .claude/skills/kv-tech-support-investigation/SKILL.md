@@ -15,7 +15,21 @@ Two rules override everything below:
 
 ## Step 0 - Preconditions
 
-- ClickHouse MCP server connected (tools `run_query`, `list_databases`, `list_tables`) and running with the support guard (`MCP_MIDDLEWARE_MODULE=mcp_clickhouse.support_guard.middleware`). If a query without a time bound succeeds, the guard is off: tell the user and keep every query tightly bounded yourself.
+### ClickHouse MCP (check first, before intake)
+
+Not everyone has the ClickHouse credentials, and the MCP server runs in a local Docker container that may be stopped. So check before relying on it:
+
+1. Look for the ClickHouse MCP tools: `mcp__clickhouse__run_query`, `mcp__clickhouse__list_databases`, `mcp__clickhouse__list_tables`. If they are listed only as deferred tools, load them with ToolSearch (`select:mcp__clickhouse__run_query,mcp__clickhouse__list_databases,mcp__clickhouse__list_tables`).
+2. If they load, run `list_databases` once. A result means the server is up: continue with Step 1.
+3. If the tools are missing, fail to load, or the call errors or times out, the server is not reachable. Do not guess why and do not try to start or configure it yourself. Ask the user with AskUserQuestion, header `ClickHouse`, question "The ClickHouse MCP server is not reachable, so I cannot read production logs. How do you want to continue?", options:
+   - **I'll start it** - "Start the MCP server, then I check again." Tell them: `docker start mcp-clickhouse` (or `docker compose up -d` from the mcp-clickhouse checkout), check `curl -s http://localhost:18000/health`, then reconnect it in this session (`/mcp` -> clickhouse -> Reconnect; a server added after the session started needs a new session). When they say it is done, repeat step 2 once. If it still fails, show the error and offer the same choice again.
+   - **Set it up first** - "I have the credentials but never set the server up." Point them to `TECH_SUPPORT.md` in the mcp-clickhouse repo (engineering-environment users: `context/knowledge/clickhouse-mcp.md`) and wait.
+   - **No access, skip logs** - "I don't have the ClickHouse credentials; investigate from the code and the ticket only."
+4. **Skip-logs mode** (the user chose "No access, skip logs", or gives up on starting it): do not ask again in this run, and never call `log-investigator`. Run Steps 1-3, 5 and 6 from the ticket, the code and anything the user pastes (screenshots, log lines, Grafana or Kibana excerpts, API responses). In Step 4, write the log searches you would have run, as ready-to-run queries with the window and tokens filled in, so someone with access can run them. In the summary (Step 7) add a line `Logs: not checked (no ClickHouse access)`, cap the confidence at **medium**, and list "run the queries in section 6" under Open questions. Tell the user that a teammate with ClickHouse access can confirm it.
+
+### The rest
+
+- When the server is up, check that it runs with the support guard (`MCP_MIDDLEWARE_MODULE=mcp_clickhouse.support_guard.middleware`). If a query without a time bound succeeds, the guard is off: tell the user and keep every query tightly bounded yourself.
 - The chatomate repository is open in the session for code lookups. Read its `CLAUDE.md` and the matching `docs/` file for the area (see `references/chatomate-map.md`).
 - Production MongoDB access is optional. If a MongoDB MCP server is connected, use it read-only. Otherwise ask the user to run the lookup and paste the IDs.
 
@@ -57,7 +71,7 @@ Before searching logs, find where this behaviour lives so you know which service
 
 ## Step 4 - Find one verifiable anchor log (delegate)
 
-Spawn the `log-investigator` subagent with a brief like:
+Skip this step in skip-logs mode (Step 0). Otherwise spawn the `log-investigator` subagent with a brief like:
 
 ```
 Environment: prod-chatomate (database cm_otel), table otel_logs
